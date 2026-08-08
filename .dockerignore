@@ -1,0 +1,11 @@
+node_modules
+dashboard/node_modules
+dashboard/dist
+tests
+*.test.js
+.env
+.git
+.gitignore
+*.md
+smoke-test.ps1
+load-test.js

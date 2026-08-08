@@ -1,0 +1,28 @@
+{
+  "name": "rate-limiter-core",
+  "version": "1.0.0",
+  "description": "Token bucket + sliding window rate limiter core — in-memory, Redis-ready.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage"
+  },
+  "dependencies": {
+    "express": "^4.19.0",
+    "ioredis": "^5.11.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ],
+    "fakeTimers": {
+      "enableGlobally": false
+    }
+  }
+}

@@ -1,0 +1,150 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Rate-Limiter Gateway — full docker-compose stack
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Services
+# ────────
+#   redis     — shared rate-limit counter store and request log stream
+#   app1      — gateway instance 1  (port 3001 exposed for direct access)
+#   app2      — gateway instance 2  (port 3002 exposed for direct access)
+#   gateway   — nginx round-robin proxy in front of app1 + app2 (port 8080)
+#   dashboard — React analytics UI served by nginx  (port 5173)
+#
+# Quick start
+# ───────────
+#   docker compose up --build
+#
+# Load test (after stack is healthy):
+#   node load-test.js
+#
+# API key pre-seeded on both instances: sk_loadtest   (free tier, 60 req/min)
+# Use API_KEY=sk_loadtest in the load test or with curl.
+#
+# Why no Postgres?
+# ────────────────
+# We chose Redis Streams for request logging (XADD/XRANGE) because:
+#   • Redis is already required for rate-limit counters — zero new infra.
+#   • XADD is O(1) and non-blocking on the hot path.
+#   • Stream IDs are time-ordered; XRANGE gives a time-slice with no index.
+# Postgres would add value only if we need week-long retention, SQL JOINs,
+# or billing-level audit trails.  Add it then; the logger interface is a
+# two-function swap (log / getRecentLogs).
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Redis ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: rl-redis
+    restart: unless-stopped
+    # Persist data across restarts (AOF + RDB snapshot).
+    # Remove the command line to run Redis in-memory-only mode.
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --save 60 1
+    volumes:
+      - redis-data:/data
+    networks:
+      - rl-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # ── App instance 1 ─────────────────────────────────────────────────────────
+  app1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rl-app1
+    restart: unless-stopped
+    environment:
+      PORT:           "3000"
+      REDIS_URL:      "redis://redis:6379"
+      INSTANCE_NAME:  "app1"
+      # Pre-seed a shared API key so both instances recognise it without
+      # needing a shared key store.  Format: key,tier,algorithm
+      SEED_KEY:       "sk_loadtest,free,sliding-window"
+    # Expose port 3001 directly so the load test can reach app1 individually
+    # if needed (e.g. to verify per-instance counters vs. global counters).
+    ports:
+      - "3001:3000"
+    networks:
+      - rl-net
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # ── App instance 2 ─────────────────────────────────────────────────────────
+  app2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rl-app2
+    restart: unless-stopped
+    environment:
+      PORT:           "3000"
+      REDIS_URL:      "redis://redis:6379"
+      INSTANCE_NAME:  "app2"
+      SEED_KEY:       "sk_loadtest,free,sliding-window"
+    ports:
+      - "3002:3000"
+    networks:
+      - rl-net
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # ── Nginx gateway (round-robin) ────────────────────────────────────────────
+  gateway:
+    image: nginx:1.27-alpine
+    container_name: rl-gateway
+    restart: unless-stopped
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8080:80"
+    networks:
+      - rl-net
+    depends_on:
+      app1:
+        condition: service_healthy
+      app2:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/nginx-health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ── React analytics dashboard ──────────────────────────────────────────────
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: rl-dashboard
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    networks:
+      - rl-net
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+# ── Volumes ────────────────────────────────────────────────────────────────
+volumes:
+  redis-data:
+    driver: local
+
+# ── Network ───────────────────────────────────────────────────────────────
+networks:
+  rl-net:
+    driver: bridge
