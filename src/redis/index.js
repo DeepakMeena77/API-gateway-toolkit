@@ -139,12 +139,19 @@ function getClient() {
 
   const url = process.env.REDIS_URL || 'redis://localhost:6379'
 
+  // Upstash (and any other TLS Redis) uses the rediss:// scheme.
+  // ioredis requires explicit tls options to complete the TLS handshake —
+  // the scheme alone is not enough on some Node versions / hosting environments.
+  const isTLS = url.startsWith('rediss://')
+
   _client = new Redis(url, {
     // Fail fast on startup rather than queuing commands indefinitely
     maxRetriesPerRequest: 3,
     enableReadyCheck: true,
     // Don't block the process from exiting when idle
     lazyConnect: false,
+    // Required for Upstash / any managed TLS Redis endpoint
+    ...(isTLS && { tls: { rejectUnauthorized: false } }),
   })
 
   // Load both Lua scripts; Redis caches them by SHA-1 (EVALSHA)
