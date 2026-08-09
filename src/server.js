@@ -27,6 +27,7 @@
  */
 
 const express          = require('express')
+const cors             = require('cors')
 const os               = require('os')
 const keysRouter       = require('./routes/keys')
 const protectedRouter  = require('./routes/protected')
@@ -40,6 +41,13 @@ const { seedRegistry } = require('./key-registry')
 const app = express()
 
 // ── Global middleware ────────────────────────────────────────────────────────
+// Allow cross-origin requests from the dashboard static site.
+// CORS_ORIGIN env var lets you lock this down to a specific origin in production.
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'X-API-Key'],
+}))
 app.use(express.json())
 
 // Tag every response with the instance name so the load test and logs

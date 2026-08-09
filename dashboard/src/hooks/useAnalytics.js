@@ -33,7 +33,14 @@ export function useAnalytics(intervalMs = 5_000) {
 
   const fetchData = useCallback(async (windowMs) => {
     try {
-      const url = windowMs ? `/analytics?window=${Math.round(windowMs / 60_000)}` : '/analytics'
+      // In production the dashboard is a static site on a different origin from
+      // the backend.  VITE_API_URL is injected at build time by Render so every
+      // fetch goes to the correct instance.  In local dev it is empty ('') and
+      // the Vite proxy forwards /analytics to localhost:3000 as before.
+      const BASE = import.meta.env.VITE_API_URL ?? ''
+      const url = windowMs
+        ? `${BASE}/analytics?window=${Math.round(windowMs / 60_000)}`
+        : `${BASE}/analytics`
       const res = await fetch(url)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const json = await res.json()
