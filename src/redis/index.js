@@ -180,7 +180,7 @@ function getClient() {
   })
 
   _client.on('connect', () =>
-    console.log(`[redis] connected  →  ${url}`)
+    console.log(`[redis] connected  →  ${redacted}`)
   )
   _client.on('error', (err) =>
     console.error('[redis] error:', err.message)
