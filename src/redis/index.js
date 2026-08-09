@@ -138,29 +138,33 @@ function getClient() {
   if (_client) return _client
 
   const rawUrl = process.env.REDIS_URL || 'redis://localhost:6379'
+  const isTLS  = rawUrl.startsWith('rediss://')
 
-  // Upstash official ioredis pattern: pass the URL string directly.
-  // rediss:// scheme tells ioredis to use TLS automatically.
-  // enableReadyCheck must be false — Upstash does not support the INFO
-  // command that ioredis uses for the ready-check.
-  //
-  // If the URL contains a username (e.g. "default"), strip it out —
-  // Upstash authenticates with password only (format: rediss://:pwd@host).
-  let url = rawUrl
-  if (rawUrl.startsWith('rediss://') && rawUrl.includes('@')) {
-    // rediss://USERNAME:PASSWORD@host:port → rediss://:PASSWORD@host:port
-    url = rawUrl.replace(/^(rediss:\/\/)[^:@]*:/, '$1:')
-  }
+  // Diagnostic: log a redacted URL so we can verify the correct value is set
+  const redacted = rawUrl.replace(/:([^@]{4})[^@]*@/, ':****@')
+  console.log(`[redis] connecting  →  ${redacted}  (tls=${isTLS})`)
 
-  _client = new Redis(url, {
-    enableReadyCheck:     false,   // Upstash doesn't support INFO ready-check
-    maxRetriesPerRequest: null,    // Don't reject commands while reconnecting
-    connectTimeout:       15_000,  // Give TLS handshake time on cold start
-    tls:                  rawUrl.startsWith('rediss://') ? { rejectUnauthorized: false } : undefined,
+  // Parse URL into components — most reliable way to connect with ioredis + Upstash.
+  // Passing the raw URL string can cause auth failures when the username field
+  // confuses ioredis's ACL AUTH command order.
+  const parsed = new URL(rawUrl)
+
+  _client = new Redis({
+    host:     parsed.hostname,
+    port:     Number(parsed.port) || (isTLS ? 6380 : 6379),
+    // Upstash password is always in the password field; username is ignored
+    password: parsed.password || undefined,
+    // TLS: required for rediss://
+    tls:      isTLS ? { rejectUnauthorized: false } : undefined,
+    // Upstash doesn't support the INFO command ioredis uses for ready-check
+    enableReadyCheck:     false,
+    maxRetriesPerRequest: null,
+    connectTimeout:       20_000,
     retryStrategy (times) {
-      // Exponential back-off, cap at 5 s, stop after 10 attempts
-      if (times > 10) return null
-      return Math.min(times * 200, 5_000)
+      if (times > 5) return null           // give up after 5 attempts
+      const delay = Math.min(times * 500, 3_000)
+      console.log(`[redis] retry #${times} in ${delay}ms`)
+      return delay
     },
   })
 
