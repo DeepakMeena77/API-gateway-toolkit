@@ -138,21 +138,38 @@ function getClient() {
   if (_client) return _client
 
   const url = process.env.REDIS_URL || 'redis://localhost:6379'
-
-  // Upstash (and any other TLS Redis) uses the rediss:// scheme.
-  // ioredis requires explicit tls options to complete the TLS handshake —
-  // the scheme alone is not enough on some Node versions / hosting environments.
   const isTLS = url.startsWith('rediss://')
 
-  _client = new Redis(url, {
-    // Fail fast on startup rather than queuing commands indefinitely
-    maxRetriesPerRequest: 3,
-    enableReadyCheck: true,
-    // Don't block the process from exiting when idle
-    lazyConnect: false,
-    // Required for Upstash / any managed TLS Redis endpoint
-    ...(isTLS && { tls: { rejectUnauthorized: false } }),
-  })
+  let options
+
+  if (isTLS) {
+    // Upstash requires the connection to be built from explicit host/port/password
+    // rather than a URL string.  ioredis's URL parser + enableReadyCheck do not
+    // play well with Upstash's managed TLS endpoint — the ready-check INFO command
+    // never completes, causing "max retries" errors on every startup.
+    const parsed   = new URL(url)
+    options = {
+      host:     parsed.hostname,
+      port:     Number(parsed.port) || 6379,
+      username: parsed.username || 'default',
+      password: decodeURIComponent(parsed.password),
+      tls:      { rejectUnauthorized: false },
+      // Upstash doesn't support the INFO command used by the ready-check
+      enableReadyCheck:    false,
+      maxRetriesPerRequest: 3,
+      connectTimeout:       10_000,
+      lazyConnect:          false,
+    }
+  } else {
+    // Local / non-TLS Redis — simple URL is fine
+    options = {
+      maxRetriesPerRequest: 3,
+      enableReadyCheck:     true,
+      lazyConnect:          false,
+    }
+  }
+
+  _client = isTLS ? new Redis(options) : new Redis(url, options)
 
   // Load both Lua scripts; Redis caches them by SHA-1 (EVALSHA)
   _client.defineCommand('tokenBucketConsume', {
