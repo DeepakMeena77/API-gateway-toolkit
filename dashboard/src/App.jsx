@@ -78,8 +78,7 @@ export default function App() {
         <div className="error-state" role="alert">
           <p>Could not load analytics data.</p>
           <p className="hint">
-            Make sure the gateway server is running on port 3000
-            and Redis is reachable.
+            Fetching from: <strong>{import.meta.env.VITE_API_URL || '(same origin)'}/analytics</strong>
           </p>
           <p className="hint" style={{ marginTop: '0.25rem' }}>
             Detail: {error}
