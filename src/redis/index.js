@@ -138,32 +138,42 @@ function getClient() {
   if (_client) return _client
 
   const rawUrl = process.env.REDIS_URL || 'redis://localhost:6379'
-  const isTLS  = rawUrl.startsWith('rediss://')
 
-  // Diagnostic: log a redacted URL so we can verify the correct value is set
-  const redacted = rawUrl.replace(/:([^@]{4})[^@]*@/, ':****@')
-  console.log(`[redis] connecting  →  ${redacted}  (tls=${isTLS})`)
+  // ── Auto-detect Upstash ──────────────────────────────────────────────────
+  // If the host is upstash.io, TLS is mandatory — even if the user accidentally
+  // set redis:// (single-s) instead of rediss://, we upgrade it automatically.
+  const parsed     = new URL(rawUrl)
+  const isUpstash  = parsed.hostname.includes('upstash.io')
+  const isTLS      = rawUrl.startsWith('rediss://') || isUpstash
 
-  // Parse URL into components — most reliable way to connect with ioredis + Upstash.
-  // Passing the raw URL string can cause auth failures when the username field
-  // confuses ioredis's ACL AUTH command order.
-  const parsed = new URL(rawUrl)
+  // Build a safe redacted label for logs (never log the password)
+  const safeHost = `${parsed.hostname}:${parsed.port}`
+  const label    = isTLS ? `rediss://****@${safeHost}` : `redis://${safeHost}`
+  console.log(`[redis] connecting  →  ${label}`)
 
   _client = new Redis({
     host:     parsed.hostname,
-    port:     Number(parsed.port) || (isTLS ? 6380 : 6379),
-    // Upstash password is always in the password field; username is ignored
-    password: parsed.password || undefined,
-    // TLS: required for rediss://
-    tls:      isTLS ? { rejectUnauthorized: false } : undefined,
-    // Upstash doesn't support the INFO command ioredis uses for ready-check
-    enableReadyCheck:     false,
+    port:     Number(parsed.port) || 6379,
+    password: parsed.password ? decodeURIComponent(parsed.password) : undefined,
+
+    // TLS — required for Upstash and any rediss:// endpoint
+    ...(isTLS && { tls: { rejectUnauthorized: false } }),
+
+    // Upstash does not respond to the INFO command ioredis sends for ready-check.
+    // Disabling it means "ready" fires as soon as the socket + AUTH succeeds.
+    enableReadyCheck: false,
+
+    // null = queue commands until connected (never reject because of slow connect)
     maxRetriesPerRequest: null,
-    connectTimeout:       20_000,
+
+    // Give the TLS handshake plenty of time on a cold-start
+    connectTimeout: 20_000,
+
+    // Keep retrying indefinitely with exponential back-off — do NOT return null
+    // (returning null closes the client permanently and causes "Connection is closed")
     retryStrategy (times) {
-      if (times > 5) return null           // give up after 5 attempts
-      const delay = Math.min(times * 500, 3_000)
-      console.log(`[redis] retry #${times} in ${delay}ms`)
+      const delay = Math.min(times * 300, 5_000)
+      console.log(`[redis] reconnecting attempt #${times} (wait ${delay}ms)`)
       return delay
     },
   })
@@ -179,12 +189,8 @@ function getClient() {
     lua: SLIDING_WINDOW_LUA,
   })
 
-  _client.on('connect', () =>
-    console.log(`[redis] connected  →  ${redacted}`)
-  )
-  _client.on('error', (err) =>
-    console.error('[redis] error:', err.message)
-  )
+  _client.on('connect', () => console.log(`[redis] connected  →  ${label}`))
+  _client.on('error',   (err) => console.error('[redis] error:', err.message))
 
   return _client
 }

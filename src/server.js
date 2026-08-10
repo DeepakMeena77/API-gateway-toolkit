@@ -84,8 +84,13 @@ if (require.main === module) {
   const PORT = process.env.PORT || 3000
 
   // Verify Redis is reachable before accepting traffic.
-  // Fail fast here rather than silently serving with broken rate limits.
-  redis.ping()
+  // Race the ping against a 25-second timeout so we fail fast if
+  // the REDIS_URL is wrong rather than hanging indefinitely.
+  const pingTimeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('Redis ping timed out after 25 s — check REDIS_URL')), 25_000)
+  )
+
+  Promise.race([redis.ping(), pingTimeout])
     .then(() => {
       // Seed a known API key into every instance if SEED_KEY is provided.
       // Format: SEED_KEY=sk_mykey,tier,algorithm
